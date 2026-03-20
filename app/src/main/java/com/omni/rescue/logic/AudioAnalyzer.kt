@@ -6,98 +6,110 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
 import org.tensorflow.lite.Interpreter
-import org.tensorflow.lite.support.tensorbuffer.TensorBuffer
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 
-class AudioAnalyzer(context: Context, private val onDetection: (Float) -> Unit) {
-    private val sampleRate = 16000
-    private val audioBufferSize = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+class AudioAnalyzer(private val context: Context, private val onTriggerDetected: () -> Unit) {
+
     private var audioRecord: AudioRecord? = null
-    private var isListening = false
     private var interpreter: Interpreter? = null
-    private val modelInputSize = 16000 * 1 // 1 second of audio (adjust to model's expected size)
-    private val modelOutputSize = 1 // binary classification (detection score)
+    private var isRecording = false
+    private var recordingThread: Thread? = null
+
+    private val sampleRate = 16000
+    private val channelConfig = AudioFormat.CHANNEL_IN_MONO
+    private val audioFormat = AudioFormat.ENCODING_PCM_16BIT
+    private val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat) * 2
+
+    // The model expects a fixed window size (e.g., 1 second of audio = 16000 samples)
+    private val windowSize = 16000   // 1 sec
+    private val audioBuffer = ShortArray(windowSize)
+    private var bufferIndex = 0
 
     init {
-        // Load TFLite model
+        loadModel()
+    }
+
+    private fun loadModel() {
         try {
-            val modelBuffer = loadModelFile(context, "hey_jarvis.tflite")
-            interpreter = Interpreter(modelBuffer)
-            Log.d("AudioAnalyzer", "Model loaded successfully")
+            val modelFile = context.assets.openFd("models/wake_word_model.tflite")
+            val inputStream = FileInputStream(modelFile.fileDescriptor)
+            val fileChannel = inputStream.channel
+            val startOffset = modelFile.startOffset
+            val declaredLength = modelFile.declaredLength
+            val buffer = fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
+            interpreter = Interpreter(buffer)
         } catch (e: Exception) {
             Log.e("AudioAnalyzer", "Failed to load model", e)
         }
     }
 
-    private fun loadModelFile(context: Context, modelName: String): MappedByteBuffer {
-        val assetFileDescriptor = context.assets.openFd(modelName)
-        val inputStream = FileInputStream(assetFileDescriptor.fileDescriptor)
-        val fileChannel = inputStream.channel
-        val startOffset = assetFileDescriptor.startOffset
-        val declaredLength = assetFileDescriptor.declaredLength
-        return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
-    }
-
-    fun start() {
-        if (interpreter == null) {
-            Log.e("AudioAnalyzer", "No model loaded, cannot start")
-            return
-        }
-        isListening = true
+    fun startListening() {
+        if (isRecording) return
         audioRecord = AudioRecord(
             MediaRecorder.AudioSource.MIC,
             sampleRate,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            audioBufferSize
+            channelConfig,
+            audioFormat,
+            bufferSize
         )
+        if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+            Log.e("AudioAnalyzer", "AudioRecord failed to initialize")
+            return
+        }
         audioRecord?.startRecording()
-
-        val audioBuffer = ShortArray(audioBufferSize)
-        val ringBuffer = mutableListOf<Short>()
-        val targetSamples = modelInputSize
-
-        Thread {
-            while (isListening) {
-                val read = audioRecord?.read(audioBuffer, 0, audioBuffer.size) ?: 0
-                if (read > 0) {
-                    for (i in 0 until read) {
-                        ringBuffer.add(audioBuffer[i])
-                    }
-                    while (ringBuffer.size >= targetSamples) {
-                        // Take the oldest targetSamples
-                        val segment = ringBuffer.take(targetSamples).toShortArray()
-                        // Convert to float [-1,1]
-                        val floatArray = FloatArray(segment.size) { segment[it].toFloat() / Short.MAX_VALUE }
-                        // Run inference
-                        val inputTensor = TensorBuffer.createFixedSize(intArrayOf(1, targetSamples), org.tensorflow.lite.DataType.FLOAT32)
-                        inputTensor.loadArray(floatArray)
-                        val outputTensor = TensorBuffer.createFixedSize(intArrayOf(1, modelOutputSize), org.tensorflow.lite.DataType.FLOAT32)
-                        interpreter?.run(inputTensor.buffer, outputTensor.buffer)
-                        val score = outputTensor.floatArray[0]
-                        // Callback with score
-                        onDetection(score)
-                        // Remove the processed segment from the ring buffer (overlap by 50% for smooth detection)
-                        val shift = targetSamples / 2
-                        repeat(shift) { if (ringBuffer.isNotEmpty()) ringBuffer.removeAt(0) }
-                    }
-                }
-            }
-        }.start()
+        isRecording = true
+        recordingThread = Thread { processAudio() }.also { it.start() }
     }
 
-    fun stop() {
-        isListening = false
+    fun stopListening() {
+        isRecording = false
+        recordingThread?.join(1000)
         audioRecord?.stop()
         audioRecord?.release()
         audioRecord = null
     }
 
-    fun close() {
-        interpreter?.close()
+    private fun processAudio() {
+        val tempBuffer = ShortArray(bufferSize / 2) // 16-bit => 2 bytes per sample
+        while (isRecording) {
+            val read = audioRecord?.read(tempBuffer, 0, tempBuffer.size) ?: 0
+            if (read > 0) {
+                for (i in 0 until read) {
+                    audioBuffer[bufferIndex] = tempBuffer[i]
+                    bufferIndex++
+                    if (bufferIndex >= windowSize) {
+                        // Buffer full → run inference
+                        val score = runInference(audioBuffer)
+                        if (score > AppPreferences(context).sensitivity) {
+                            onTriggerDetected()
+                        }
+                        // Reset buffer for next window (with overlap optional)
+                        bufferIndex = 0
+                    }
+                }
+            }
+        }
+    }
+
+    private fun runInference(audioData: ShortArray): Float {
+        // Convert ShortArray to ByteBuffer in the format expected by the model.
+        // microWakeWord models usually expect normalized float32 [-1,1] or int16.
+        // We'll assume float32 for generality.
+        val inputBuffer = ByteBuffer.allocateDirect(windowSize * 4) // 4 bytes per float
+        inputBuffer.order(ByteOrder.nativeOrder())
+        for (sample in audioData) {
+            val floatVal = sample / 32768.0f   // normalize to [-1,1]
+            inputBuffer.putFloat(floatVal)
+        }
+        inputBuffer.rewind()
+
+        // Output: typically a single float (score) or array.
+        val outputArray = Array(1) { FloatArray(1) }
+        interpreter?.run(inputBuffer, outputArray)
+        return outputArray[0][0]
     }
 }

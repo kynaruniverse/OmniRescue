@@ -4,116 +4,91 @@ import android.content.Context
 import android.hardware.camera2.CameraManager
 import android.media.AudioManager
 import android.media.MediaPlayer
-import android.net.Uri
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
-import android.os.VibratorManager
-import androidx.core.content.getSystemService
-import com.omni.rescue.data.AppPreferences
-import kotlinx.coroutines.*
+import android.util.Log
+import com.omni.rescue.R
 
 class AlarmController(private val context: Context) {
-    private val prefs = AppPreferences(context)
-    private var mediaPlayer: MediaPlayer? = null
-    private var flashlightRunnable: Runnable? = null
-    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
-    private var isFlashing = false
 
-    suspend fun triggerAlarm() {
-        // Override silent mode and increase volume
-        val audioManager = context.getSystemService<AudioManager>()
-        audioManager?.let {
-            it.ringerMode = AudioManager.RINGER_MODE_NORMAL
-            it.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, AudioManager.FLAG_REMOVE_SOUND_AND_VIBRATE)
-            it.adjustStreamVolume(AudioManager.STREAM_ALARM, AudioManager.ADJUST_RAISE, AudioManager.FLAG_REMOVE_SOUND_AND_VIBRATE)
-        }
+    private var mediaPlayer: MediaPlayer? = null
+    private var isFlashing = false
+    private var flashThread: Thread? = null
+
+    fun triggerAlarm() {
+        // Override silent mode and raise volume
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioManager.ringerMode = AudioManager.RINGER_MODE_NORMAL
+        audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, 0)
+        // Set volume to max gradually (simulate ramp)
+        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxVolume, 0)
 
         // Play sound
-        startSound()
+        mediaPlayer = MediaPlayer.create(context, R.raw.alarm_sound)   // add a raw sound file
+        mediaPlayer?.isLooping = true
+        mediaPlayer?.start()
 
-        // Vibrate
-        if (prefs.vibrateEnabled) {
-            startVibration()
-        }
-
-        // Flashlight
-        if (prefs.flashEnabled) {
-            startFlashlight()
-        }
-
-        // Stop everything after 30 seconds
-        delay(30000)
-        stopAlarm()
-    }
-
-    private fun startSound() {
-        val soundUri = prefs.alarmSoundUri?.let { Uri.parse(it) } ?: android.provider.Settings.System.DEFAULT_ALARM_ALERT_URI
-        try {
-            mediaPlayer = MediaPlayer.create(context, soundUri).apply {
-                isLooping = true
-                setVolume(1.0f, 1.0f)
-                start()
-            }
-        } catch (e: Exception) {
-            // Fallback to default
-            mediaPlayer = MediaPlayer.create(context, android.provider.Settings.System.DEFAULT_ALARM_ALERT_URI).apply {
-                isLooping = true
-                start()
-            }
-        }
-    }
-
-    private fun startVibration() {
-        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val vibratorManager = context.getSystemService<VibratorManager>()
-            vibratorManager?.defaultVibrator
+        // Vibration
+        val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 500, 500), intArrayOf(0, 255, 0), -1))
         } else {
-            @Suppress("DEPRECATION")
-            context.getSystemService<Vibrator>()
+            vibrator.vibrate(longArrayOf(0, 500, 500), -1)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            vibrator?.vibrate(VibrationEffect.createOneShot(5000, VibrationEffect.DEFAULT_AMPLITUDE))
-        } else {
-            @Suppress("DEPRECATION")
-            vibrator?.vibrate(5000)
-        }
+
+        // Flash LED (SOS pattern)
+        startFlashSOS()
     }
 
-    private fun startFlashlight() {
-        if (isFlashing) return
-        isFlashing = true
-        val cameraManager = context.getSystemService<CameraManager>()
-        val cameraId = cameraManager?.cameraIdList?.firstOrNull() ?: return
-        flashlightRunnable = object : Runnable {
-            override fun run() {
-                if (!isFlashing) return
-                try {
-                    cameraManager.setTorchMode(cameraId, true)
-                    handler.postDelayed({
-                        cameraManager.setTorchMode(cameraId, false)
-                        handler.postDelayed(this, 500)
-                    }, 250)
-                } catch (e: Exception) {
-                    // Camera not available
-                }
-            }
-        }
-        handler.post(flashlightRunnable!!)
-    }
-
-    private fun stopAlarm() {
+    fun stopAlarm() {
         mediaPlayer?.stop()
         mediaPlayer?.release()
         mediaPlayer = null
+        stopFlash()
+        // Optionally reset volume? We'll leave as is.
+    }
 
-        // Stop flashlight
-        isFlashing = false
-        flashlightRunnable?.let { handler.removeCallbacks(it) }
-        val cameraManager = context.getSystemService<CameraManager>()
-        cameraManager?.cameraIdList?.firstOrNull()?.let {
+    private fun startFlashSOS() {
+        if (isFlashing) return
+        isFlashing = true
+        val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val cameraId = cameraManager.cameraIdList.firstOrNull()
+        if (cameraId == null) {
+            Log.e("AlarmController", "No camera found for flash")
+            return
+        }
+
+        flashThread = Thread {
+            val pattern = listOf(100, 100, 100, 100, 100, 300) // SOS: short, short, short, long, long, long, short, short, short
+            var index = 0
+            while (isFlashing) {
+                val duration = if (index % 2 == 0) 200 else 200 // simple on/off pattern; refine later
+                try {
+                    cameraManager.setTorchMode(cameraId, index % 2 == 0)
+                } catch (e: Exception) {
+                    Log.e("AlarmController", "Flash error", e)
+                }
+                Thread.sleep(duration.toLong())
+                index++
+            }
+            // Turn off when done
             try {
-                cameraManager.setTorchMode(it, false)
+                cameraManager.setTorchMode(cameraId, false)
+            } catch (e: Exception) { }
+        }.also { it.start() }
+    }
+
+    private fun stopFlash() {
+        isFlashing = false
+        flashThread?.interrupt()
+        flashThread = null
+        // Ensure LED is off
+        val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        cameraManager.cameraIdList.firstOrNull()?.let { cameraId ->
+            try {
+                cameraManager.setTorchMode(cameraId, false)
             } catch (e: Exception) { }
         }
     }

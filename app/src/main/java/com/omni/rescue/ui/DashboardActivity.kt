@@ -1,24 +1,20 @@
 package com.omni.rescue.ui
 
-import android.content.Intent
-import android.os.Build
 import android.os.Bundle
-import android.widget.Button
 import android.widget.SeekBar
-import android.widget.Switch
 import android.widget.TextView
+import android.widget.ToggleButton
 import androidx.appcompat.app.AppCompatActivity
 import com.omni.rescue.R
-import com.omni.rescue.data.AppPreferences
+import com.omni.rescue.data.local.AppPreferences
 import com.omni.rescue.service.RescueListenerService
 
 class DashboardActivity : AppCompatActivity() {
+
     private lateinit var prefs: AppPreferences
-    private lateinit var btnToggleService: Button
     private lateinit var sensitivitySeekBar: SeekBar
-    private lateinit var tvSensitivity: TextView
-    private lateinit var switchFlash: Switch
-    private lateinit var switchVibrate: Switch
+    private lateinit var sensitivityText: TextView
+    private lateinit var toggleService: ToggleButton
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -26,45 +22,31 @@ class DashboardActivity : AppCompatActivity() {
 
         prefs = AppPreferences(this)
 
-        btnToggleService = findViewById(R.id.btnToggleService)
-        sensitivitySeekBar = findViewById(R.id.sensitivitySeekBar)
-        tvSensitivity = findViewById(R.id.tvSensitivity)
-        switchFlash = findViewById(R.id.switchFlash)
-        switchVibrate = findViewById(R.id.switchVibrate)
-
-        updateUI()
-
-        btnToggleService.setOnClickListener {
-            prefs.isServiceEnabled = !prefs.isServiceEnabled
-            updateUI()
-            if (prefs.isServiceEnabled) {
-                startService(Intent(this, RescueListenerService::class.java))
-            } else {
-                stopService(Intent(this, RescueListenerService::class.java))
-            }
-        }
+        sensitivitySeekBar = findViewById(R.id.sensitivity_seekbar)
+        sensitivityText = findViewById(R.id.sensitivity_text)
+        toggleService = findViewById(R.id.toggle_service)
 
         sensitivitySeekBar.progress = (prefs.sensitivity * 100).toInt()
+        sensitivityText.text = "Sensitivity: ${prefs.sensitivity}"
+
         sensitivitySeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                val value = progress / 100f
-                tvSensitivity.text = "Sensitivity: ${value}"
-                if (fromUser) {
-                    prefs.sensitivity = value
-                }
+                val sensitivity = progress / 100f
+                prefs.sensitivity = sensitivity
+                sensitivityText.text = "Sensitivity: $sensitivity"
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
 
-        switchFlash.isChecked = prefs.flashEnabled
-        switchFlash.setOnCheckedChangeListener { _, isChecked -> prefs.flashEnabled = isChecked }
-
-        switchVibrate.isChecked = prefs.vibrateEnabled
-        switchVibrate.setOnCheckedChangeListener { _, isChecked -> prefs.vibrateEnabled = isChecked }
-    }
-
-    private fun updateUI() {
-        btnToggleService.text = if (prefs.isServiceEnabled) "Stop Service" else "Start Service"
+        toggleService.isChecked = prefs.isServiceRunning
+        toggleService.setOnCheckedChangeListener { _, isChecked ->
+            if (isChecked) {
+                startService(Intent(this, RescueListenerService::class.java))
+            } else {
+                stopService(Intent(this, RescueListenerService::class.java))
+            }
+            prefs.isServiceRunning = isChecked
+        }
     }
 }

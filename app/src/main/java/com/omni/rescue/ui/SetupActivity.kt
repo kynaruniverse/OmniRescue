@@ -3,24 +3,31 @@ package com.omni.rescue.ui
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.Button
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.omni.rescue.R
-import com.omni.rescue.data.AppPreferences
+import com.omni.rescue.data.local.AppPreferences
+import com.omni.rescue.service.RescueListenerService
 
 class SetupActivity : AppCompatActivity() {
+
     private lateinit var prefs: AppPreferences
-    private val requiredPermissions = mutableListOf(
-        Manifest.permission.RECORD_AUDIO,
-        Manifest.permission.POST_NOTIFICATIONS
-    ).apply {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            add(Manifest.permission.POST_NOTIFICATIONS)
+
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val allGranted = permissions.values.all { it }
+        if (allGranted) {
+            requestBatteryOptimization()
+        } else {
+            Toast.makeText(this, "All permissions are required to run Omni-Rescue", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -30,46 +37,54 @@ class SetupActivity : AppCompatActivity() {
 
         prefs = AppPreferences(this)
 
-        findViewById<Button>(R.id.btnGrantPermissions).setOnClickListener {
-            requestPermissions()
-        }
-
-        // If already granted, go to dashboard
-        if (allPermissionsGranted()) {
-            startActivity(Intent(this, DashboardActivity::class.java))
-            finish()
+        findViewById<Button>(R.id.btn_start).setOnClickListener {
+            checkPermissionsAndStart()
         }
     }
 
-    private fun requestPermissions() {
-        val missing = requiredPermissions.filter {
+    private fun checkPermissionsAndStart() {
+        val permissionsNeeded = mutableListOf<String>().apply {
+            add(Manifest.permission.RECORD_AUDIO)
+            add(Manifest.permission.POST_NOTIFICATIONS)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+            add(Manifest.permission.CAMERA) // for flash
+            add(Manifest.permission.VIBRATE) // not dangerous, but we list anyway
+        }
+
+        val missingPermissions = permissionsNeeded.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }.toTypedArray()
-        if (missing.isNotEmpty()) {
-            ActivityCompat.requestPermissions(this, missing, 100)
+        }
+
+        if (missingPermissions.isNotEmpty()) {
+            requestPermissionLauncher.launch(missingPermissions.toTypedArray())
         } else {
-            onPermissionsGranted()
+            requestBatteryOptimization()
         }
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 100 && allPermissionsGranted()) {
-            onPermissionsGranted()
-        } else {
-            Toast.makeText(this, "All permissions are required", Toast.LENGTH_SHORT).show()
+    private fun requestBatteryOptimization() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:$packageName")
+            }
+            startActivity(intent)
         }
-    }
-
-    private fun allPermissionsGranted(): Boolean {
-        return requiredPermissions.all {
-            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
-        }
-    }
-
-    private fun onPermissionsGranted() {
-        prefs.isServiceEnabled = true
-        startActivity(Intent(this, DashboardActivity::class.java))
+        // After user returns, start the service
+        startListeningService()
         finish()
+    }
+
+    private fun startListeningService() {
+        val serviceIntent = Intent(this, RescueListenerService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
+        prefs.isServiceRunning = true
+        // Launch Dashboard
+        startActivity(Intent(this, DashboardActivity::class.java))
     }
 }

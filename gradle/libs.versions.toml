@@ -1,0 +1,19 @@
+[versions]
+kotlin = "2.1.0"
+android-gradle = "8.5.0"
+tensorflow-lite = "2.16.0"          # LiteRT is still under this artifact
+androidx-core = "1.13.0"
+androidx-appcompat = "1.7.0"
+androidx-activity = "1.9.0"
+androidx-lifecycle = "2.8.0"
+androidx-camera = "1.4.0"            # Not needed for AudioRecord, but for LED maybe
+material = "1.12.0"
+
+[libraries]
+tensorflow-lite = { group = "org.tensorflow", name = "tensorflow-lite", version.ref = "tensorflow-lite" }
+tensorflow-lite-support = { group = "org.tensorflow", name = "tensorflow-lite-support", version.ref = "tensorflow-lite" }
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "androidx-core" }
+androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "androidx-appcompat" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "androidx-activity" }  # if using Compose
+androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "androidx-lifecycle" }
+material = { group = "com.google.android.material", name = "material", version.ref = "material" }
