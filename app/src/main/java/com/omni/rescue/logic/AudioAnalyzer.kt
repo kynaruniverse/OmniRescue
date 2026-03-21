@@ -90,31 +90,42 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
 
     private fun processAudio() {
         val tempBuffer = ShortArray(bufferSize / 2)
+        var readCount = 0
+        var inferenceCount = 0
         while (isRecording) {
             val read = audioRecord?.read(tempBuffer, 0, tempBuffer.size) ?: 0
             if (read > 0) {
+                readCount++
+                if (readCount % 10 == 0) {
+                    // Show every 10th read that audio is coming in
+                    mainHandler.post {
+                        Toast.makeText(context, "Audio: $read samples", Toast.LENGTH_SHORT).show()
+                    }
+                }
                 for (i in 0 until read) {
                     audioBuffer[bufferIndex] = tempBuffer[i]
                     bufferIndex++
                     if (bufferIndex >= windowSize) {
+                        inferenceCount++
                         try {
                             val score = runInference(audioBuffer)
-                            // Show score if above 0.05 (so we see if any sound triggers)
-                            if (score > 0.05f) {
-                                mainHandler.post {
-                                    Toast.makeText(context, "Score: $score", Toast.LENGTH_SHORT).show()
-                                }
+                            // Show every inference result
+                            mainHandler.post {
+                                Toast.makeText(context, "Inference #$inferenceCount score: $score", Toast.LENGTH_SHORT).show()
                             }
                             if (score > prefs.sensitivity) {
                                 onTriggerDetected()
                             }
                         } catch (e: Exception) {
                             Log.e("AudioAnalyzer", "Inference error", e)
+                            mainHandler.post { Toast.makeText(context, "Inference error: ${e.message}", Toast.LENGTH_LONG).show() }
                         }
                         System.arraycopy(audioBuffer, hopSize, audioBuffer, 0, windowSize - hopSize)
                         bufferIndex = windowSize - hopSize
                     }
                 }
+            } else if (read == -1) {
+                mainHandler.post { Toast.makeText(context, "AudioRecord read error", Toast.LENGTH_LONG).show() }
             }
         }
     }
