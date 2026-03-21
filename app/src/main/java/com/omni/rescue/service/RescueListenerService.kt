@@ -17,6 +17,8 @@ class RescueListenerService : Service() {
     companion object {
         const val ACTION_STOP_ALARM = "ACTION_STOP_ALARM"
         const val ACTION_STOP_SERVICE = "ACTION_STOP_SERVICE"
+        const val ACTION_SCORE_UPDATE = "com.omni.rescue.SCORE_UPDATE"
+        const val EXTRA_SCORE = "score"
         private const val TAG = "RescueListenerService"
     }
 
@@ -25,9 +27,17 @@ class RescueListenerService : Service() {
         prefs = AppPreferences(applicationContext)
         alarmController = AlarmController(applicationContext)
         audioAnalyzer = AudioAnalyzer(applicationContext) {
-            // onTriggerDetected is already posted to main thread inside AudioAnalyzer
-            alarmController?.triggerAlarm()
-        }
+            context = applicationContext,
+            onTriggerDetected = {
+                alarmController?.triggerAlarm()
+            },
+            onScoreUpdate = { score ->
+                sendBroadcast(Intent(ACTION_SCORE_UPDATE).apply {
+                    putExtra(EXTRA_SCORE, score)
+                    setPackage(packageName)
+                })
+            }
+        )
         startForeground(
             NotificationHandler.NOTIFICATION_ID,
             NotificationHandler.createNotification(this)

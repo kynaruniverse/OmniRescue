@@ -1,12 +1,16 @@
 package com.omni.rescue.ui
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Bundle
 import android.widget.Button
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.ToggleButton
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import com.omni.rescue.R
 import com.omni.rescue.data.local.AppPreferences
 import com.omni.rescue.service.RescueListenerService
@@ -19,6 +23,22 @@ class DashboardActivity : AppCompatActivity() {
     private lateinit var toggleService: ToggleButton
     private lateinit var btnStopAlarm: Button
     private lateinit var statusText: TextView
+    private lateinit var scoreText: TextView
+
+    private val scoreReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val score = intent.getFloatExtra(RescueListenerService.EXTRA_SCORE, -1f)
+            val threshold = prefs.sensitivity
+            val pct = (score * 100).toInt()
+            scoreText.text = "Live score: $pct%   (threshold: ${(threshold * 100).toInt()}%)"
+            scoreText.setTextColor(
+                if (score >= threshold)
+                    ContextCompat.getColor(this@DashboardActivity, android.R.color.holo_red_dark)
+                else
+                    ContextCompat.getColor(this@DashboardActivity, android.R.color.darker_gray)
+            )
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -31,6 +51,7 @@ class DashboardActivity : AppCompatActivity() {
         toggleService = findViewById(R.id.toggle_service)
         btnStopAlarm = findViewById(R.id.btn_stop_alarm)
         statusText = findViewById(R.id.status_text)
+        scoreText = findViewById(R.id.score_text)
 
         refreshUI()
 
@@ -66,6 +87,17 @@ class DashboardActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         refreshUI()
+        ContextCompat.registerReceiver(
+            this,
+            scoreReceiver,
+            IntentFilter(RescueListenerService.ACTION_SCORE_UPDATE),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+    }
+
+    override fun onPause() {
+        super.onPause()
+        unregisterReceiver(scoreReceiver)
     }
 
     private fun refreshUI() {

@@ -61,4 +61,16 @@
         android:textColor="#757575"
         android:layout_marginTop="8dp"/>
 
+    <TextView
+        android:id="@+id/score_text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Live score: --"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:textColor="#757575"
+        android:layout_marginTop="24dp"
+        android:padding="12dp"
+        android:background="#F5F5F5"/>
+
 </LinearLayout>
