@@ -90,18 +90,10 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
 
     private fun processAudio() {
         val tempBuffer = ShortArray(bufferSize / 2)
-        var readCount = 0
         var inferenceCount = 0
         while (isRecording) {
             val read = audioRecord?.read(tempBuffer, 0, tempBuffer.size) ?: 0
             if (read > 0) {
-                readCount++
-                if (readCount % 10 == 0) {
-                    // Show every 10th read that audio is coming in
-                    mainHandler.post {
-                        Toast.makeText(context, "Audio: $read samples", Toast.LENGTH_SHORT).show()
-                    }
-                }
                 for (i in 0 until read) {
                     audioBuffer[bufferIndex] = tempBuffer[i]
                     bufferIndex++
@@ -109,7 +101,6 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
                         inferenceCount++
                         try {
                             val score = runInference(audioBuffer)
-                            // Show every inference result
                             mainHandler.post {
                                 Toast.makeText(context, "Inference #$inferenceCount score: $score", Toast.LENGTH_SHORT).show()
                             }
@@ -131,16 +122,15 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
     }
 
     private fun runInference(audioData: ShortArray): Float {
-        val inputBuffer = ByteBuffer.allocateDirect(windowSize * 4)
-        inputBuffer.order(ByteOrder.nativeOrder())
-        for (sample in audioData) {
-            val floatVal = sample / 32768.0f
-            inputBuffer.putFloat(floatVal)
+        // Convert to float array of shape [1, windowSize]
+        val floatInput = Array(1) { FloatArray(windowSize) }
+        for (i in audioData.indices) {
+            floatInput[0][i] = audioData[i] / 32768.0f
         }
-        inputBuffer.rewind()
 
-        val outputArray = Array(1) { FloatArray(1) }
-        interpreter?.run(inputBuffer, outputArray)
-        return outputArray[0][0]
+        // Output: assume single float
+        val output = Array(1) { FloatArray(1) }
+        interpreter?.run(floatInput, output)
+        return output[0][0]
     }
 }
