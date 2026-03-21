@@ -14,7 +14,6 @@ import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.channels.FileChannel
-import java.nio.FloatBuffer
 
 class AudioAnalyzer(private val context: Context, private val onTriggerDetected: () -> Unit) {
 
@@ -36,6 +35,9 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
     private val audioBuffer = ShortArray(windowSize)
     private var bufferIndex = 0
 
+    private var inputShape: IntArray? = null
+    private var outputShape: IntArray? = null
+
     init {
         loadModel()
     }
@@ -52,10 +54,15 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
 
             // Get input tensor details
             val inputTensor = interpreter?.getInputTensor(0)
-            val shape = inputTensor?.shape()?.joinToString(", ") ?: "unknown"
-            val dataType = inputTensor?.dataType()?.toString() ?: "unknown"
+            inputShape = inputTensor?.shape()
+            Log.d("AudioAnalyzer", "Input shape: ${inputShape?.joinToString(", ")}")
+            // Get output tensor details
+            val outputTensor = interpreter?.getOutputTensor(0)
+            outputShape = outputTensor?.shape()
+            Log.d("AudioAnalyzer", "Output shape: ${outputShape?.joinToString(", ")}")
+
             mainHandler.post {
-                Toast.makeText(context, "Model input shape: [$shape], type: $dataType", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "Model ready. Check logcat for shape.", Toast.LENGTH_LONG).show()
             }
         } catch (e: Exception) {
             Log.e("AudioAnalyzer", "Failed to load model", e)
@@ -109,11 +116,14 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
                         inferenceCount++
                         try {
                             val score = runInference(audioBuffer)
-                            mainHandler.post {
-                                Toast.makeText(context, "Inference #$inferenceCount score: $score", Toast.LENGTH_SHORT).show()
-                            }
                             if (score > prefs.sensitivity) {
                                 onTriggerDetected()
+                            }
+                            // Show score every 10 inferences to avoid too many toasts
+                            if (inferenceCount % 10 == 0) {
+                                mainHandler.post {
+                                    Toast.makeText(context, "Score: $score", Toast.LENGTH_SHORT).show()
+                                }
                             }
                         } catch (e: Exception) {
                             Log.e("AudioAnalyzer", "Inference error", e)
@@ -130,24 +140,57 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
     }
 
     private fun runInference(audioData: ShortArray): Float {
-        // Use a ByteBuffer for input (as originally, but let's adjust shape)
-        val inputBuffer = ByteBuffer.allocateDirect(windowSize * 4)
-        inputBuffer.order(ByteOrder.nativeOrder())
-        for (sample in audioData) {
-            inputBuffer.putFloat(sample / 32768.0f)
+        // Convert to float array
+        val floatData = FloatArray(windowSize)
+        for (i in audioData.indices) {
+            floatData[i] = audioData[i] / 32768.0f
         }
-        inputBuffer.rewind()
 
-        // Output buffer for a single float
-        val outputBuffer = ByteBuffer.allocateDirect(4)
-        outputBuffer.order(ByteOrder.nativeOrder())
-        outputBuffer.rewind()
+        // Determine input shape and create appropriate input object
+        val shape = inputShape
+        if (shape == null) {
+            Log.e("AudioAnalyzer", "Input shape not available")
+            return 0f
+        }
 
-        // Run inference with explicit shapes
-        interpreter?.run(inputBuffer, outputBuffer)
+        // Calculate expected number of elements
+        val expectedElements = shape.reduce { acc, i -> acc * i }
+        if (expectedElements != windowSize && expectedElements != windowSize * shape[0]) {
+            Log.e("AudioAnalyzer", "Model expects $expectedElements elements, but we have $windowSize")
+            return 0f
+        }
 
-        // Convert output buffer to float
-        outputBuffer.rewind()
-        return outputBuffer.float
+        // Create input based on shape
+        val input = when (shape.size) {
+            1 -> {
+                // 1D input: just the float array
+                floatData
+            }
+            2 -> {
+                // 2D input: [batch, time] -> we need array of arrays
+                arrayOf(floatData)
+            }
+            else -> {
+                Log.e("AudioAnalyzer", "Unsupported input shape dimensions: ${shape.size}")
+                return 0f
+            }
+        }
+
+        // Create output buffer based on output shape
+        val output = when (outputShape?.size) {
+            1 -> FloatArray(outputShape[0])
+            2 -> Array(outputShape[0]) { FloatArray(outputShape[1]) }
+            else -> Array(1) { FloatArray(1) }  // fallback
+        }
+
+        // Run inference
+        interpreter?.run(input, output)
+
+        // Extract result as a float
+        return when (output) {
+            is FloatArray -> output[0]
+            is Array<*> -> (output[0] as FloatArray)[0]
+            else -> 0f
+        }
     }
 }
