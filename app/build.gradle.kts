@@ -28,15 +28,21 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    packaging {
+        resources {
+            excludes += "/META-INF/DEPENDENCIES"
+            excludes += "/META-INF/LICENSE"
+            excludes += "/META-INF/LICENSE.txt"
+            excludes += "/META-INF/NOTICE"
+            excludes += "/META-INF/NOTICE.txt"
+        }
+    }
 }
 
 dependencies {
     implementation(libs.tensorflow.lite)
-    // // implementation(libs.tensorflow.lite.support)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
-    // For lifecycle (optional)
     implementation(libs.androidx.lifecycle.runtime.ktx)
-    // For camera flash control (we'll use CameraManager directly, no extra libs)
 }

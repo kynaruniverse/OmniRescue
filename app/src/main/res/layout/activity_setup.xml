@@ -3,19 +3,38 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="16dp">
+    android:padding="24dp"
+    android:gravity="center_vertical">
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Omni-Rescue Setup"
-        android:textSize="24sp"
+        android:text="Omni-Rescue"
+        android:textSize="32sp"
+        android:textStyle="bold"
         android:layout_marginBottom="16dp"/>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="This app listens in the background. Say your wake word and it will trigger a loud alarm, SOS flashlight, and vibration to attract rescuers."
+        android:textSize="16sp"
+        android:lineSpacingMultiplier="1.4"
+        android:layout_marginBottom="16dp"/>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Permissions required:\n• Microphone — wake word detection\n• Notifications — persistent service\n• Camera — flashlight SOS"
+        android:textSize="14sp"
+        android:textColor="#555555"
+        android:lineSpacingMultiplier="1.4"
+        android:layout_marginBottom="32dp"/>
 
     <Button
         android:id="@+id/btn_start"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Start Listening"
-        android:layout_gravity="center_horizontal"/>
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:text="Grant Permissions and Start"/>
+
 </LinearLayout>

@@ -3,53 +3,63 @@ package com.omni.rescue.service
 import android.app.Service
 import android.content.Intent
 import android.os.IBinder
-import android.widget.Toast
+import android.util.Log
 import com.omni.rescue.data.local.AppPreferences
 import com.omni.rescue.logic.AlarmController
 import com.omni.rescue.logic.AudioAnalyzer
 
 class RescueListenerService : Service() {
 
-    private lateinit var audioAnalyzer: AudioAnalyzer
-    private lateinit var alarmController: AlarmController
+    private var audioAnalyzer: AudioAnalyzer? = null
+    private var alarmController: AlarmController? = null
     private lateinit var prefs: AppPreferences
+
+    companion object {
+        const val ACTION_STOP_ALARM = "ACTION_STOP_ALARM"
+        const val ACTION_STOP_SERVICE = "ACTION_STOP_SERVICE"
+        private const val TAG = "RescueListenerService"
+    }
 
     override fun onCreate() {
         super.onCreate()
-        prefs = AppPreferences(this)
-        alarmController = AlarmController(this)
-        audioAnalyzer = AudioAnalyzer(this) {
-            // Trigger alarm when wake word detected
-            alarmController.triggerAlarm()
+        prefs = AppPreferences(applicationContext)
+        alarmController = AlarmController(applicationContext)
+        audioAnalyzer = AudioAnalyzer(applicationContext) {
+            // onTriggerDetected is already posted to main thread inside AudioAnalyzer
+            alarmController?.triggerAlarm()
         }
-
-        // Start foreground with notification
         startForeground(
             NotificationHandler.NOTIFICATION_ID,
             NotificationHandler.createNotification(this)
         )
+        Log.d(TAG, "Service created")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            "STOP_ALARM" -> {
-                alarmController.stopAlarm()
+            ACTION_STOP_ALARM -> {
+                alarmController?.stopAlarm()
+                audioAnalyzer?.resetAlarmGate()
+            }
+            ACTION_STOP_SERVICE -> {
+                prefs.isServiceRunning = false
+                stopSelf()
             }
             else -> {
-                try {
-                    audioAnalyzer.startListening()
-                    prefs.isServiceRunning = true
-                } catch (e: Exception) {
-                    Toast.makeText(this, "Start error: ${e.message}", Toast.LENGTH_LONG).show()
-                }
+                audioAnalyzer?.startListening()
+                prefs.isServiceRunning = true
             }
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
-        audioAnalyzer.stopListening()
+        audioAnalyzer?.release()
+        audioAnalyzer = null
+        alarmController?.stopAlarm()
+        alarmController = null
         prefs.isServiceRunning = false
+        Log.d(TAG, "Service destroyed")
         super.onDestroy()
     }
 

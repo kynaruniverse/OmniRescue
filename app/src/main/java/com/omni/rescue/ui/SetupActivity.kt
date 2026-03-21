@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Button
@@ -20,22 +19,38 @@ class SetupActivity : AppCompatActivity() {
 
     private lateinit var prefs: AppPreferences
 
-    private val requestPermissionLauncher = registerForActivityResult(
+    private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         val allGranted = permissions.values.all { it }
         if (allGranted) {
             requestBatteryOptimization()
         } else {
-            Toast.makeText(this, "All permissions are required to run Omni-Rescue", Toast.LENGTH_LONG).show()
+            val denied = permissions.filterValues { !it }.keys.joinToString(", ")
+            Toast.makeText(this, "Required permissions denied: $denied", Toast.LENGTH_LONG).show()
+            if (permissions.any { !it.value && !shouldShowRequestPermissionRationale(it.key) }) {
+                openAppSettings()
+            }
         }
+    }
+
+    // Launched AFTER the battery dialog so service starts only when user returns
+    private val batteryOptLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        startListeningService()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_setup)
 
-        prefs = AppPreferences(this)
+        prefs = AppPreferences(applicationContext)
+
+        if (prefs.isServiceRunning) {
+            goToDashboard()
+            return
+        }
 
         findViewById<Button>(R.id.btn_start).setOnClickListener {
             checkPermissionsAndStart()
@@ -43,48 +58,43 @@ class SetupActivity : AppCompatActivity() {
     }
 
     private fun checkPermissionsAndStart() {
-        val permissionsNeeded = mutableListOf<String>().apply {
-            add(Manifest.permission.RECORD_AUDIO)
-            add(Manifest.permission.POST_NOTIFICATIONS)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                add(Manifest.permission.POST_NOTIFICATIONS)
-            }
-            add(Manifest.permission.CAMERA) // for flash
-            add(Manifest.permission.VIBRATE) // not dangerous, but we list anyway
-        }
+        val needed = listOf(
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.POST_NOTIFICATIONS,
+            Manifest.permission.CAMERA
+            // VIBRATE is a normal permission — must NOT be requested at runtime
+        )
 
-        val missingPermissions = permissionsNeeded.filter {
+        val missing = needed.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
 
-        if (missingPermissions.isNotEmpty()) {
-            requestPermissionLauncher.launch(missingPermissions.toTypedArray())
-        } else {
-            requestBatteryOptimization()
-        }
+        if (missing.isEmpty()) requestBatteryOptimization()
+        else permissionLauncher.launch(missing.toTypedArray())
     }
 
     private fun requestBatteryOptimization() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                data = Uri.parse("package:$packageName")
-            }
-            startActivity(intent)
+        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+            data = Uri.parse("package:$packageName")
         }
-        // After user returns, start the service
-        startListeningService()
-        finish()
+        // Use result launcher so service starts only after user dismisses the dialog
+        batteryOptLauncher.launch(intent)
     }
 
     private fun startListeningService() {
-        val serviceIntent = Intent(this, RescueListenerService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
-        } else {
-            startService(serviceIntent)
-        }
+        startForegroundService(Intent(this, RescueListenerService::class.java))
         prefs.isServiceRunning = true
-        // Launch Dashboard
+        goToDashboard()
+    }
+
+    private fun goToDashboard() {
         startActivity(Intent(this, DashboardActivity::class.java))
+        finish()
+    }
+
+    private fun openAppSettings() {
+        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.parse("package:$packageName")
+        })
     }
 }

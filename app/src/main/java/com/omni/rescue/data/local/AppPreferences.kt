@@ -11,13 +11,8 @@ class AppPreferences(context: Context) {
         get() = prefs.getFloat("sensitivity", 0.7f)   // threshold 0-1
         set(value) = prefs.edit { putFloat("sensitivity", value) }
 
-    var triggerPhrase: String
-        get() = prefs.getString("trigger_phrase", "Hey Jarvis") ?: "Hey Jarvis"
-        set(value) = prefs.edit { putString("trigger_phrase", value) }
-
     var isServiceRunning: Boolean
         get() = prefs.getBoolean("service_running", false)
         set(value) = prefs.edit { putBoolean("service_running", value) }
 
-    // Add more settings: sound, flash, vibrate toggles, etc.
 }

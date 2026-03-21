@@ -7,28 +7,33 @@ import android.media.MediaRecorder
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import android.widget.Toast
 import org.tensorflow.lite.Interpreter
 import com.omni.rescue.data.local.AppPreferences
 import java.io.FileInputStream
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.nio.channels.FileChannel
+import java.util.concurrent.atomic.AtomicBoolean
 
-class AudioAnalyzer(private val context: Context, private val onTriggerDetected: () -> Unit) {
+class AudioAnalyzer(
+    context: Context,
+    private val onTriggerDetected: () -> Unit
+) {
 
+    private val appContext = context.applicationContext
     private var audioRecord: AudioRecord? = null
     private var interpreter: Interpreter? = null
-    private var isRecording = false
+    private val isRecording = AtomicBoolean(false)
     private var recordingThread: Thread? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val prefs = AppPreferences(appContext)
 
-    private val prefs = AppPreferences(context)
+    // Prevents the alarm firing more than once per listening session
+    private val alarmTriggered = AtomicBoolean(false)
 
     private val sampleRate = 16000
     private val channelConfig = AudioFormat.CHANNEL_IN_MONO
     private val audioFormat = AudioFormat.ENCODING_PCM_16BIT
-    private val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat) * 2
+    private val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+        .coerceAtLeast(3200) * 2
 
     private val windowSize = 16000
     private val hopSize = 8000
@@ -38,148 +43,143 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
     private var inputShape: IntArray? = null
     private var outputShape: IntArray? = null
 
+    companion object {
+        private const val TAG = "AudioAnalyzer"
+    }
+
     init {
         loadModel()
     }
 
     private fun loadModel() {
         try {
-            val modelFile = context.assets.openFd("models/wake_word_model.tflite")
-            val inputStream = FileInputStream(modelFile.fileDescriptor)
-            val fileChannel = inputStream.channel
-            val startOffset = modelFile.startOffset
-            val declaredLength = modelFile.declaredLength
-            val buffer = fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
+            val modelFd = appContext.assets.openFd("models/wake_word_model.tflite")
+            val buffer = FileInputStream(modelFd.fileDescriptor).channel
+                .map(FileChannel.MapMode.READ_ONLY, modelFd.startOffset, modelFd.declaredLength)
             interpreter = Interpreter(buffer)
-
-            // Get input tensor details
-            val inputTensor = interpreter?.getInputTensor(0)
-            inputShape = inputTensor?.shape()
-            Log.d("AudioAnalyzer", "Input shape: ${inputShape?.joinToString(", ")}")
-            // Get output tensor details
-            val outputTensor = interpreter?.getOutputTensor(0)
-            outputShape = outputTensor?.shape()
-            Log.d("AudioAnalyzer", "Output shape: ${outputShape?.joinToString(", ")}")
-
-            mainHandler.post {
-                Toast.makeText(context, "Model ready. Check logcat for shape.", Toast.LENGTH_LONG).show()
-            }
+            inputShape = interpreter?.getInputTensor(0)?.shape()
+            outputShape = interpreter?.getOutputTensor(0)?.shape()
+            Log.d(TAG, "Model loaded. Input: ${inputShape?.contentToString()}, Output: ${outputShape?.contentToString()}")
         } catch (e: Exception) {
-            Log.e("AudioAnalyzer", "Failed to load model", e)
-            mainHandler.post { Toast.makeText(context, "Model error: ${e.message}", Toast.LENGTH_LONG).show() }
+            Log.e(TAG, "Failed to load model", e)
         }
     }
 
     fun startListening() {
-        if (isRecording) return
-        try {
-            audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.MIC,
-                sampleRate,
-                channelConfig,
-                audioFormat,
-                bufferSize
-            )
-            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-                Log.e("AudioAnalyzer", "AudioRecord failed to initialize")
-                mainHandler.post { Toast.makeText(context, "AudioRecord init failed", Toast.LENGTH_LONG).show() }
-                return
-            }
-            audioRecord?.startRecording()
-            isRecording = true
-            recordingThread = Thread { processAudio() }.also { it.start() }
-            mainHandler.post { Toast.makeText(context, "Listening started", Toast.LENGTH_SHORT).show() }
-        } catch (e: Exception) {
-            Log.e("AudioAnalyzer", "startListening error", e)
-            mainHandler.post { Toast.makeText(context, "Start error: ${e.message}", Toast.LENGTH_LONG).show() }
+        if (!isRecording.compareAndSet(false, true)) return
+
+        val record = AudioRecord(
+            MediaRecorder.AudioSource.MIC,
+            sampleRate,
+            channelConfig,
+            audioFormat,
+            bufferSize
+        )
+
+        if (record.state != AudioRecord.STATE_INITIALIZED) {
+            Log.e(TAG, "AudioRecord failed to initialize")
+            record.release()
+            isRecording.set(false)
+            return
         }
+
+        alarmTriggered.set(false)
+        audioRecord = record
+        record.startRecording()
+
+        recordingThread = Thread({ processAudio() }, "AudioAnalyzer-Thread")
+            .also { it.isDaemon = true; it.start() }
+
+        Log.d(TAG, "Listening started")
     }
 
     fun stopListening() {
-        isRecording = false
-        recordingThread?.join(1000)
+        isRecording.set(false)
+        recordingThread?.interrupt()
         audioRecord?.stop()
         audioRecord?.release()
         audioRecord = null
+        recordingThread = null
+        Log.d(TAG, "Listening stopped")
+    }
+
+    fun resetAlarmGate() {
+        alarmTriggered.set(false)
+    }
+
+    fun release() {
+        stopListening()
+        interpreter?.close()
+        interpreter = null
     }
 
     private fun processAudio() {
         val tempBuffer = ShortArray(bufferSize / 2)
-        var inferenceCount = 0
-        while (isRecording) {
-            val read = audioRecord?.read(tempBuffer, 0, tempBuffer.size) ?: 0
-            if (read > 0) {
-                for (i in 0 until read) {
-                    audioBuffer[bufferIndex] = tempBuffer[i]
-                    bufferIndex++
-                    if (bufferIndex >= windowSize) {
-                        inferenceCount++
-                        try {
-                            val score = runInference(audioBuffer)
-                            if (score > prefs.sensitivity) {
-                                onTriggerDetected()
-                            }
-                            if (inferenceCount % 10 == 0) {
-                                mainHandler.post {
-                                    Toast.makeText(context, "Score: $score", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        } catch (e: Exception) {
-                            Log.e("AudioAnalyzer", "Inference error", e)
-                            mainHandler.post { Toast.makeText(context, "Inference error: ${e.message}", Toast.LENGTH_LONG).show() }
-                        }
-                        System.arraycopy(audioBuffer, hopSize, audioBuffer, 0, windowSize - hopSize)
-                        bufferIndex = windowSize - hopSize
-                    }
-                }
-            } else if (read == -1) {
-                mainHandler.post { Toast.makeText(context, "AudioRecord read error", Toast.LENGTH_LONG).show() }
+        while (isRecording.get() && !Thread.currentThread().isInterrupted) {
+            val read = audioRecord?.read(tempBuffer, 0, tempBuffer.size) ?: break
+            when {
+                read > 0 -> processChunk(tempBuffer, read)
+                read == AudioRecord.ERROR_BAD_VALUE ->
+                    Log.w(TAG, "AudioRecord: ERROR_BAD_VALUE")
+                read == AudioRecord.ERROR_INVALID_OPERATION ->
+                    Log.w(TAG, "AudioRecord: ERROR_INVALID_OPERATION")
+                read < 0 ->
+                    Log.w(TAG, "AudioRecord: unknown error code $read")
             }
         }
     }
 
+    private fun processChunk(tempBuffer: ShortArray, read: Int) {
+        for (i in 0 until read) {
+            audioBuffer[bufferIndex++] = tempBuffer[i]
+            if (bufferIndex >= windowSize) {
+                runInferenceSafe()
+                System.arraycopy(audioBuffer, hopSize, audioBuffer, 0, windowSize - hopSize)
+                bufferIndex = windowSize - hopSize
+            }
+        }
+    }
+
+    private fun runInferenceSafe() {
+        try {
+            val score = runInference(audioBuffer)
+            Log.v(TAG, "Score: $score (threshold: ${prefs.sensitivity})")
+            if (score > prefs.sensitivity && alarmTriggered.compareAndSet(false, true)) {
+                Log.i(TAG, "Wake word detected! Score=$score")
+                mainHandler.post { onTriggerDetected() }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Inference error", e)
+        }
+    }
+
     private fun runInference(audioData: ShortArray): Float {
-        // Convert to float array
-        val floatData = FloatArray(windowSize)
-        for (i in audioData.indices) {
-            floatData[i] = audioData[i] / 32768.0f
-        }
-
-        // Use local copies to avoid smart cast issues
+        val interp = interpreter ?: return 0f
         val shape = inputShape ?: return 0f
-        val outShape = outputShape
+        val outShape = outputShape ?: return 0f
 
-        // Calculate expected number of elements
-        val expectedElements = shape.reduce { acc, i -> acc * i }
-        if (expectedElements != windowSize && expectedElements != windowSize * shape[0]) {
-            Log.e("AudioAnalyzer", "Model expects $expectedElements elements, but we have $windowSize")
-            return 0f
-        }
+        val floatData = FloatArray(windowSize) { audioData[it] / 32768.0f }
 
-        // Create input based on shape
-        val input = when (shape.size) {
+        val input: Any = when (shape.size) {
             1 -> floatData
             2 -> arrayOf(floatData)
             else -> {
-                Log.e("AudioAnalyzer", "Unsupported input shape dimensions: ${shape.size}")
+                Log.e(TAG, "Unsupported input shape dimensions: ${shape.size}")
                 return 0f
             }
         }
 
-        // Create output buffer based on output shape
-        val output = when (outShape?.size) {
+        val output: Any = when (outShape.size) {
             1 -> FloatArray(outShape[0])
             2 -> Array(outShape[0]) { FloatArray(outShape[1]) }
-            else -> Array(1) { FloatArray(1) }  // fallback
+            else -> Array(1) { FloatArray(1) }
         }
 
-        // Run inference
-        interpreter?.run(input, output)
+        interp.run(input, output)
 
-        // Extract result as a float
         return when (output) {
             is FloatArray -> output[0]
-            is Array<*> -> (output[0] as FloatArray)[0]
+            is Array<*> -> (output[0] as? FloatArray)?.get(0) ?: 0f
             else -> 0f
         }
     }

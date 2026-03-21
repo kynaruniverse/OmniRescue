@@ -1,3 +1,13 @@
 <resources>
     <string name="app_name">Omni‑Rescue</string>
+    <string name="sensitivity_label">Sensitivity: %1$s</string>
+    <string name="status_active">Service is active — listening for wake word</string>
+    <string name="status_stopped">Service is stopped</string>
+    <string name="setup_title">Omni‑Rescue</string>
+    <string name="setup_description">This app listens in the background. Say your wake word and it will trigger a loud alarm, SOS flashlight, and vibration to attract rescuers.</string>
+    <string name="setup_permissions_info">Permissions required:\n• Microphone — wake word detection\n• Notifications — persistent service\n• Camera — flashlight SOS</string>
+    <string name="btn_grant_start">Grant Permissions and Start</string>
+    <string name="btn_stop_alarm">Stop Alarm</string>
+    <string name="btn_start_listening">Start Listening</string>
+    <string name="btn_stop_listening">Stop Listening</string>
 </resources>
