@@ -26,7 +26,7 @@ class RescueListenerService : Service() {
         super.onCreate()
         prefs = AppPreferences(applicationContext)
         alarmController = AlarmController(applicationContext)
-        audioAnalyzer = AudioAnalyzer(applicationContext) {
+        audioAnalyzer = AudioAnalyzer(
             context = applicationContext,
             onTriggerDetected = {
                 alarmController?.triggerAlarm()
