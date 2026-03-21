@@ -4,6 +4,8 @@ import android.content.Context
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 import org.tensorflow.lite.Interpreter
@@ -19,6 +21,7 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
     private var interpreter: Interpreter? = null
     private var isRecording = false
     private var recordingThread: Thread? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private val prefs = AppPreferences(context)
 
@@ -45,10 +48,10 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
             val declaredLength = modelFile.declaredLength
             val buffer = fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
             interpreter = Interpreter(buffer)
+            mainHandler.post { Toast.makeText(context, "Model loaded", Toast.LENGTH_SHORT).show() }
         } catch (e: Exception) {
             Log.e("AudioAnalyzer", "Failed to load model", e)
-            // Show error on screen
-            Toast.makeText(context, "Model error: ${e.message}", Toast.LENGTH_LONG).show()
+            mainHandler.post { Toast.makeText(context, "Model error: ${e.message}", Toast.LENGTH_LONG).show() }
         }
     }
 
@@ -64,15 +67,16 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
             )
             if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
                 Log.e("AudioAnalyzer", "AudioRecord failed to initialize")
-                Toast.makeText(context, "AudioRecord init failed", Toast.LENGTH_LONG).show()
+                mainHandler.post { Toast.makeText(context, "AudioRecord init failed", Toast.LENGTH_LONG).show() }
                 return
             }
             audioRecord?.startRecording()
             isRecording = true
             recordingThread = Thread { processAudio() }.also { it.start() }
+            mainHandler.post { Toast.makeText(context, "Listening started", Toast.LENGTH_SHORT).show() }
         } catch (e: Exception) {
             Log.e("AudioAnalyzer", "startListening error", e)
-            Toast.makeText(context, "Start error: ${e.message}", Toast.LENGTH_LONG).show()
+            mainHandler.post { Toast.makeText(context, "Start error: ${e.message}", Toast.LENGTH_LONG).show() }
         }
     }
 
@@ -95,6 +99,12 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
                     if (bufferIndex >= windowSize) {
                         try {
                             val score = runInference(audioBuffer)
+                            // Show score if above 0.05 (so we see if any sound triggers)
+                            if (score > 0.05f) {
+                                mainHandler.post {
+                                    Toast.makeText(context, "Score: $score", Toast.LENGTH_SHORT).show()
+                                }
+                            }
                             if (score > prefs.sensitivity) {
                                 onTriggerDetected()
                             }
