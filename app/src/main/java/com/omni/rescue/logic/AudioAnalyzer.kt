@@ -119,7 +119,6 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
                             if (score > prefs.sensitivity) {
                                 onTriggerDetected()
                             }
-                            // Show score every 10 inferences to avoid too many toasts
                             if (inferenceCount % 10 == 0) {
                                 mainHandler.post {
                                     Toast.makeText(context, "Score: $score", Toast.LENGTH_SHORT).show()
@@ -146,12 +145,9 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
             floatData[i] = audioData[i] / 32768.0f
         }
 
-        // Determine input shape and create appropriate input object
-        val shape = inputShape
-        if (shape == null) {
-            Log.e("AudioAnalyzer", "Input shape not available")
-            return 0f
-        }
+        // Use local copies to avoid smart cast issues
+        val shape = inputShape ?: return 0f
+        val outShape = outputShape
 
         // Calculate expected number of elements
         val expectedElements = shape.reduce { acc, i -> acc * i }
@@ -162,14 +158,8 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
 
         // Create input based on shape
         val input = when (shape.size) {
-            1 -> {
-                // 1D input: just the float array
-                floatData
-            }
-            2 -> {
-                // 2D input: [batch, time] -> we need array of arrays
-                arrayOf(floatData)
-            }
+            1 -> floatData
+            2 -> arrayOf(floatData)
             else -> {
                 Log.e("AudioAnalyzer", "Unsupported input shape dimensions: ${shape.size}")
                 return 0f
@@ -177,9 +167,9 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
         }
 
         // Create output buffer based on output shape
-        val output = when (outputShape?.size) {
-            1 -> FloatArray(outputShape[0])
-            2 -> Array(outputShape[0]) { FloatArray(outputShape[1]) }
+        val output = when (outShape?.size) {
+            1 -> FloatArray(outShape[0])
+            2 -> Array(outShape[0]) { FloatArray(outShape[1]) }
             else -> Array(1) { FloatArray(1) }  // fallback
         }
 
