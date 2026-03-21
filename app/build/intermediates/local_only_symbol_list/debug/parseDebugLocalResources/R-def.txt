@@ -1,0 +1,11 @@
+R_DEF: Internal format may change without notice
+local
+drawable ic_mic
+drawable ic_stop
+id btn_start
+id sensitivity_seekbar
+id sensitivity_text
+id toggle_service
+layout activity_dashboard
+layout activity_setup
+raw alarm_sound
