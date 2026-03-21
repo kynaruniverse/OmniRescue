@@ -5,6 +5,7 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
+import android.widget.Toast
 import org.tensorflow.lite.Interpreter
 import com.omni.rescue.data.local.AppPreferences
 import java.io.FileInputStream
@@ -26,9 +27,8 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
     private val audioFormat = AudioFormat.ENCODING_PCM_16BIT
     private val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat) * 2
 
-    // Model expects 1s window, but we'll use 0.5s overlap (50%)
     private val windowSize = 16000
-    private val hopSize = 8000   // 0.5s
+    private val hopSize = 8000
     private val audioBuffer = ShortArray(windowSize)
     private var bufferIndex = 0
 
@@ -47,25 +47,33 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
             interpreter = Interpreter(buffer)
         } catch (e: Exception) {
             Log.e("AudioAnalyzer", "Failed to load model", e)
+            // Show error on screen
+            Toast.makeText(context, "Model error: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
     fun startListening() {
         if (isRecording) return
-        audioRecord = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
-            sampleRate,
-            channelConfig,
-            audioFormat,
-            bufferSize
-        )
-        if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-            Log.e("AudioAnalyzer", "AudioRecord failed to initialize")
-            return
+        try {
+            audioRecord = AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                sampleRate,
+                channelConfig,
+                audioFormat,
+                bufferSize
+            )
+            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                Log.e("AudioAnalyzer", "AudioRecord failed to initialize")
+                Toast.makeText(context, "AudioRecord init failed", Toast.LENGTH_LONG).show()
+                return
+            }
+            audioRecord?.startRecording()
+            isRecording = true
+            recordingThread = Thread { processAudio() }.also { it.start() }
+        } catch (e: Exception) {
+            Log.e("AudioAnalyzer", "startListening error", e)
+            Toast.makeText(context, "Start error: ${e.message}", Toast.LENGTH_LONG).show()
         }
-        audioRecord?.startRecording()
-        isRecording = true
-        recordingThread = Thread { processAudio() }.also { it.start() }
     }
 
     fun stopListening() {
@@ -85,11 +93,14 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
                     audioBuffer[bufferIndex] = tempBuffer[i]
                     bufferIndex++
                     if (bufferIndex >= windowSize) {
-                        val score = runInference(audioBuffer)
-                        if (score > prefs.sensitivity) {
-                            onTriggerDetected()
+                        try {
+                            val score = runInference(audioBuffer)
+                            if (score > prefs.sensitivity) {
+                                onTriggerDetected()
+                            }
+                        } catch (e: Exception) {
+                            Log.e("AudioAnalyzer", "Inference error", e)
                         }
-                        // Shift buffer to keep last hopSize samples (overlap)
                         System.arraycopy(audioBuffer, hopSize, audioBuffer, 0, windowSize - hopSize)
                         bufferIndex = windowSize - hopSize
                     }

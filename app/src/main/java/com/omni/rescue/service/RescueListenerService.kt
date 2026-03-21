@@ -3,8 +3,7 @@ package com.omni.rescue.service
 import android.app.Service
 import android.content.Intent
 import android.os.IBinder
-import android.util.Log
-import androidx.core.app.ServiceCompat
+import android.widget.Toast
 import com.omni.rescue.data.local.AppPreferences
 import com.omni.rescue.logic.AlarmController
 import com.omni.rescue.logic.AudioAnalyzer
@@ -37,9 +36,12 @@ class RescueListenerService : Service() {
                 alarmController.stopAlarm()
             }
             else -> {
-                // Normal start: begin listening
-                audioAnalyzer.startListening()
-                prefs.isServiceRunning = true
+                try {
+                    audioAnalyzer.startListening()
+                    prefs.isServiceRunning = true
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Start error: ${e.message}", Toast.LENGTH_LONG).show()
+                }
             }
         }
         return START_STICKY
