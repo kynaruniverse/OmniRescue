@@ -12,13 +12,12 @@ import com.omni.rescue.R
 import com.omni.rescue.ui.DashboardActivity
 
 object NotificationHandler {
-    private const val CHANNEL_ID = "omni_rescue_channel"
-    private const val NOTIFICATION_ID = 1001
+    const val NOTIFICATION_ID = 1001
 
     fun createNotification(context: Context): Notification {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                CHANNEL_ID,
+                "omni_rescue_channel",
                 "Omni-Rescue",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
@@ -42,10 +41,10 @@ object NotificationHandler {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        return NotificationCompat.Builder(context, CHANNEL_ID)
+        return NotificationCompat.Builder(context, "omni_rescue_channel")
             .setContentTitle("Omni-Rescue")
             .setContentText("Listening for your voice...")
-            .setSmallIcon(R.drawable.ic_mic)   // add your icon
+            .setSmallIcon(R.drawable.ic_mic)
             .setContentIntent(pendingIntent)
             .addAction(R.drawable.ic_stop, "Stop Alarm", stopPendingIntent)
             .setOngoing(true)

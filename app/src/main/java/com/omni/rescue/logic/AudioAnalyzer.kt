@@ -6,10 +6,10 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
 import org.tensorflow.lite.Interpreter
+import com.omni.rescue.data.local.AppPreferences
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 
 class AudioAnalyzer(private val context: Context, private val onTriggerDetected: () -> Unit) {
@@ -19,13 +19,16 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
     private var isRecording = false
     private var recordingThread: Thread? = null
 
+    private val prefs = AppPreferences(context)
+
     private val sampleRate = 16000
     private val channelConfig = AudioFormat.CHANNEL_IN_MONO
     private val audioFormat = AudioFormat.ENCODING_PCM_16BIT
     private val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat) * 2
 
-    // The model expects a fixed window size (e.g., 1 second of audio = 16000 samples)
-    private val windowSize = 16000   // 1 sec
+    // Model expects 1s window, but we'll use 0.5s overlap (50%)
+    private val windowSize = 16000
+    private val hopSize = 8000   // 0.5s
     private val audioBuffer = ShortArray(windowSize)
     private var bufferIndex = 0
 
@@ -74,7 +77,7 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
     }
 
     private fun processAudio() {
-        val tempBuffer = ShortArray(bufferSize / 2) // 16-bit => 2 bytes per sample
+        val tempBuffer = ShortArray(bufferSize / 2)
         while (isRecording) {
             val read = audioRecord?.read(tempBuffer, 0, tempBuffer.size) ?: 0
             if (read > 0) {
@@ -82,13 +85,13 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
                     audioBuffer[bufferIndex] = tempBuffer[i]
                     bufferIndex++
                     if (bufferIndex >= windowSize) {
-                        // Buffer full → run inference
                         val score = runInference(audioBuffer)
-                        if (score > AppPreferences(context).sensitivity) {
+                        if (score > prefs.sensitivity) {
                             onTriggerDetected()
                         }
-                        // Reset buffer for next window (with overlap optional)
-                        bufferIndex = 0
+                        // Shift buffer to keep last hopSize samples (overlap)
+                        System.arraycopy(audioBuffer, hopSize, audioBuffer, 0, windowSize - hopSize)
+                        bufferIndex = windowSize - hopSize
                     }
                 }
             }
@@ -96,18 +99,14 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
     }
 
     private fun runInference(audioData: ShortArray): Float {
-        // Convert ShortArray to ByteBuffer in the format expected by the model.
-        // microWakeWord models usually expect normalized float32 [-1,1] or int16.
-        // We'll assume float32 for generality.
-        val inputBuffer = ByteBuffer.allocateDirect(windowSize * 4) // 4 bytes per float
+        val inputBuffer = ByteBuffer.allocateDirect(windowSize * 4)
         inputBuffer.order(ByteOrder.nativeOrder())
         for (sample in audioData) {
-            val floatVal = sample / 32768.0f   // normalize to [-1,1]
+            val floatVal = sample / 32768.0f
             inputBuffer.putFloat(floatVal)
         }
         inputBuffer.rewind()
 
-        // Output: typically a single float (score) or array.
         val outputArray = Array(1) { FloatArray(1) }
         interpreter?.run(inputBuffer, outputArray)
         return outputArray[0][0]

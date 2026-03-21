@@ -1,5 +1,6 @@
 package com.omni.rescue.ui
 
+import android.content.Intent
 import android.os.Bundle
 import android.widget.SeekBar
 import android.widget.TextView
