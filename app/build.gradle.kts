@@ -9,7 +9,7 @@ android {
 
     defaultConfig {
         applicationId = "com.omni.rescue"
-        minSdk = 36    // target Android 16/17
+        minSdk = 33    // target Android 16/17
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
