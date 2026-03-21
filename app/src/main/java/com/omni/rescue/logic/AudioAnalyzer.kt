@@ -14,6 +14,7 @@ import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.channels.FileChannel
+import java.nio.FloatBuffer
 
 class AudioAnalyzer(private val context: Context, private val onTriggerDetected: () -> Unit) {
 
@@ -48,7 +49,14 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
             val declaredLength = modelFile.declaredLength
             val buffer = fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
             interpreter = Interpreter(buffer)
-            mainHandler.post { Toast.makeText(context, "Model loaded", Toast.LENGTH_SHORT).show() }
+
+            // Get input tensor details
+            val inputTensor = interpreter?.getInputTensor(0)
+            val shape = inputTensor?.shape()?.joinToString(", ") ?: "unknown"
+            val dataType = inputTensor?.dataType()?.toString() ?: "unknown"
+            mainHandler.post {
+                Toast.makeText(context, "Model input shape: [$shape], type: $dataType", Toast.LENGTH_LONG).show()
+            }
         } catch (e: Exception) {
             Log.e("AudioAnalyzer", "Failed to load model", e)
             mainHandler.post { Toast.makeText(context, "Model error: ${e.message}", Toast.LENGTH_LONG).show() }
@@ -122,15 +130,24 @@ class AudioAnalyzer(private val context: Context, private val onTriggerDetected:
     }
 
     private fun runInference(audioData: ShortArray): Float {
-        // Convert to float array of shape [1, windowSize]
-        val floatInput = Array(1) { FloatArray(windowSize) }
-        for (i in audioData.indices) {
-            floatInput[0][i] = audioData[i] / 32768.0f
+        // Use a ByteBuffer for input (as originally, but let's adjust shape)
+        val inputBuffer = ByteBuffer.allocateDirect(windowSize * 4)
+        inputBuffer.order(ByteOrder.nativeOrder())
+        for (sample in audioData) {
+            inputBuffer.putFloat(sample / 32768.0f)
         }
+        inputBuffer.rewind()
 
-        // Output: assume single float
-        val output = Array(1) { FloatArray(1) }
-        interpreter?.run(floatInput, output)
-        return output[0][0]
+        // Output buffer for a single float
+        val outputBuffer = ByteBuffer.allocateDirect(4)
+        outputBuffer.order(ByteOrder.nativeOrder())
+        outputBuffer.rewind()
+
+        // Run inference with explicit shapes
+        interpreter?.run(inputBuffer, outputBuffer)
+
+        // Convert output buffer to float
+        outputBuffer.rewind()
+        return outputBuffer.float
     }
 }
